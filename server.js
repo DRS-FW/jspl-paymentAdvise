@@ -25,18 +25,21 @@ app.use((req, res, next) => {
 
   const now = new Date();
   if (pauseUntil && now < pauseUntil) {
+    console.log(`[BLOCKED] ${req.path} blocked due to maintenance. Ends at ${pauseUntil}`);
     return res.json({});
   }
 
   if (pauseUntil && now >= pauseUntil) {
     isPaused = false;
     pauseUntil = null;
+    console.log(`[RESUME] Auto-resumed from maintenance.`);
   }
 
   next();
 });
 
 app.get('/', (req, res) => {
+  console.log(`GET /`);
   res.send('✅ Local PDF Generator is running.');
 });
 
@@ -49,15 +52,18 @@ const sanitizeFileName = (str) => str.replace(/[^a-zA-Z0-9-_]/g, '-');
 
 const fetchAndSendPDF = async (res, url, fileId) => {
   try {
+    console.log(`📥 Fetching PDF for fileId: ${fileId}`);
     const response = await axios.get(url, { headers });
     const dataArray = response.data?.data;
 
     if (!dataArray || dataArray.length === 0) {
+      console.log(`❗ No data found for fileId: ${fileId}`);
       return res.json({ fileUrl: 'Payment Advice Document not available' });
     }
 
     const paymentAdviceLink = dataArray[0]?.paymentAdviceLink;
     if (!paymentAdviceLink || !paymentAdviceLink.includes('base64,')) {
+      console.log(`❗ Invalid base64 PDF link for fileId: ${fileId}`);
       return res.json({ fileUrl: 'Payment Advice Document not available' });
     }
 
@@ -72,12 +78,16 @@ const fetchAndSendPDF = async (res, url, fileId) => {
     fs.writeFileSync(filePath, pdfBuffer);
 
     setTimeout(() => {
-      fs.unlink(filePath, () => {});
+      fs.unlink(filePath, (err) => {
+        if (err) console.log(`❌ Failed to delete ${fileName}`, err);
+      });
     }, 10 * 60 * 1000);
 
     const fileUrl = `${BASE_FILE_URL}/public/${fileName}`;
+    console.log(`✅ PDF saved: ${fileUrl}`);
     res.json({ fileUrl });
-  } catch {
+  } catch (err) {
+    console.log('❌ Error in fetchAndSendPDF:', err.message);
     res.json({ fileUrl: 'Payment Advice Document not available' });
   }
 };
@@ -121,10 +131,12 @@ app.post('/enter-maintenance', (req, res) => {
   const { duration, key } = req.body;
 
   if (!key || key !== MAINTENANCE_KEY) {
+    console.log('❌ Invalid maintenance key');
     return res.status(403).json({});
   }
 
   if (!duration || typeof duration !== 'string') {
+    console.log('❌ Invalid duration format');
     return res.status(400).json({});
   }
 
@@ -134,6 +146,7 @@ app.post('/enter-maintenance', (req, res) => {
   } else {
     const match = duration.match(/^(\d+)(m|h)$/);
     if (!match) {
+      console.log('❌ Invalid duration string pattern');
       return res.status(400).json({});
     }
 
@@ -143,6 +156,7 @@ app.post('/enter-maintenance', (req, res) => {
     pauseUntil = new Date(Date.now() + ms);
   }
 
+  console.log(`🔒 Maintenance mode activated for ${duration}`);
   res.json({});
 });
 
@@ -150,13 +164,18 @@ app.post('/exit-maintenance', (req, res) => {
   const { key } = req.body;
 
   if (!key || key !== MAINTENANCE_KEY) {
+    console.log('❌ Invalid key to exit maintenance');
     return res.status(403).json({});
   }
 
-  if (!isPaused) return res.json({});
+  if (!isPaused) {
+    console.log('ℹ️ Server is already active');
+    return res.json({});
+  }
 
   isPaused = false;
   pauseUntil = null;
+  console.log(`🔓 Maintenance mode exited manually`);
   res.json({});
 });
 
@@ -168,4 +187,6 @@ app.get('/status', (req, res) => {
   });
 });
 
-app.listen(PORT);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
+});
