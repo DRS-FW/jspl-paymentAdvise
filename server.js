@@ -2,17 +2,17 @@ require('dotenv').config();
 
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const BASE_FILE_URL = process.env.PUBLIC_FILE_HOST;
+const BASE_FILE_URL = process.env.PUBLIC_FILE_HOST || `http://localhost:${PORT}`;
 const MAINTENANCE_KEY = process.env.MAINTENANCE_KEY;
 
 app.use(express.json());
-app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// Still serve static files (optional, if you want to keep /public)
+app.use('/public', express.static('public'));
 
 let isPaused = false;
 let pauseUntil = null;
@@ -45,8 +45,13 @@ const headers = {
   clientId: process.env.CLIENT_ID,
 };
 const API_BASE_URL = process.env.API_BASE_URL;
+
+// Sanitize filename helper
 const sanitizeFileName = (str) => str.replace(/[^a-zA-Z0-9-_]/g, '-');
 
+/**
+ * Fetch PDF (Base64) → Convert to Buffer → Send as Download Response
+ */
 const fetchAndSendPDF = async (res, url, fileId) => {
   try {
     const response = await axios.get(url, { headers });
@@ -67,22 +72,18 @@ const fetchAndSendPDF = async (res, url, fileId) => {
     const token = crypto.randomBytes(6).toString('hex');
     const safeFileId = sanitizeFileName(fileId);
     const fileName = `payment-advise-${safeFileId}-${token}.pdf`;
-    const filePath = path.join(__dirname, 'public', fileName);
 
-    fs.mkdirSync(path.join(__dirname, 'public'), { recursive: true });
-    fs.writeFileSync(filePath, pdfBuffer);
-
-    setTimeout(() => {
-      fs.unlink(filePath, () => {});
-    }, 10 * 60 * 1000);
-
-    const fileUrl = `${BASE_FILE_URL}/public/${fileName}`;
-    res.json({ fileUrl });
-  } catch {
+    // ✅ Directly send as download instead of saving to disk
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Error fetching PDF:', err.message);
     res.json({ fileUrl: 'Payment Advice Document not available' });
   }
 };
 
+// Routes
 app.get('/download-pdf-task', async (req, res) => {
   const { taskId, emailId } = req.query;
   if (!taskId || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -118,6 +119,7 @@ app.get('/download-pdf-vendor', async (req, res) => {
   await fetchAndSendPDF(res, url, `invvendor-${invoiceNumber}-${vendorCode}`);
 });
 
+// Maintenance Mode APIs
 app.post('/enter-maintenance', (req, res) => {
   const { duration, key } = req.body;
 
@@ -156,4 +158,6 @@ app.get('/status', (req, res) => {
   });
 });
 
-app.listen(PORT);
+app.listen(PORT, () => {
+  console.log(`✅ Server running at http://localhost:${PORT}`);
+});
