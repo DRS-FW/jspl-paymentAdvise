@@ -11,8 +11,15 @@ const PORT = process.env.PORT || 3000;
 const BASE_FILE_URL = process.env.PUBLIC_FILE_HOST;
 const MAINTENANCE_KEY = process.env.MAINTENANCE_KEY;
 
+const FILE_DIR = 'public'; // Keep folder name 'public' for consistency
+const FILE_DIR_PATH = path.join(__dirname, FILE_DIR);
+
+// ✅ Ensure directory exists
+if (!fs.existsSync(FILE_DIR_PATH)) {
+  fs.mkdirSync(FILE_DIR_PATH);
+}
+
 app.use(express.json());
-app.use('/public', express.static(path.join(__dirname, 'public')));
 
 let isPaused = false;
 let pauseUntil = null;
@@ -67,16 +74,17 @@ const fetchAndSendPDF = async (res, url, fileId) => {
     const token = crypto.randomBytes(6).toString('hex');
     const safeFileId = sanitizeFileName(fileId);
     const fileName = `payment-advise-${safeFileId}-${token}.pdf`;
-    const filePath = path.join(__dirname, 'public', fileName);
+    const filePath = path.join(FILE_DIR_PATH, fileName);
 
-    fs.mkdirSync(path.join(__dirname, 'public'), { recursive: true });
     fs.writeFileSync(filePath, pdfBuffer);
 
+    // Delete the file after 10 minutes
     setTimeout(() => {
       fs.unlink(filePath, () => {});
     }, 10 * 60 * 1000);
 
-    const fileUrl = `${BASE_FILE_URL}/public/${fileName}`;
+    // ✅ Change file URL to use /files endpoint
+    const fileUrl = `${BASE_FILE_URL}/files/${fileName}`;
     res.json({ fileUrl });
   } catch {
     res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -121,15 +129,23 @@ app.get('/download-pdf-vendor', async (req, res) => {
 app.post('/enter-maintenance', (req, res) => {
   const { duration, key } = req.body;
 
-  if (!key || key !== MAINTENANCE_KEY) return res.status(403).json({});
-  if (!duration || typeof duration !== 'string') return res.status(400).json({});
+  if (!key || key !== MAINTENANCE_KEY) {
+    return res.status(403).json({});
+  }
+
+  if (!duration || typeof duration !== 'string') {
+    return res.status(400).json({});
+  }
 
   if (duration === 'indefinite') {
     isPaused = true;
     pauseUntil = new Date('9999-12-31');
   } else {
     const match = duration.match(/^(\d+)(m|h)$/);
-    if (!match) return res.status(400).json({});
+    if (!match) {
+      return res.status(400).json({});
+    }
+
     const [_, value, unit] = match;
     const ms = unit === 'm' ? value * 60000 : value * 3600000;
     isPaused = true;
@@ -141,8 +157,13 @@ app.post('/enter-maintenance', (req, res) => {
 
 app.post('/exit-maintenance', (req, res) => {
   const { key } = req.body;
-  if (!key || key !== MAINTENANCE_KEY) return res.status(403).json({});
+
+  if (!key || key !== MAINTENANCE_KEY) {
+    return res.status(403).json({});
+  }
+
   if (!isPaused) return res.json({});
+
   isPaused = false;
   pauseUntil = null;
   res.json({});
@@ -156,4 +177,15 @@ app.get('/status', (req, res) => {
   });
 });
 
-app.listen(PORT);
+// ✅ NEW: Serve saved files manually from public folder
+app.get('/files/:filename', (req, res) => {
+  const filePath = path.join(FILE_DIR_PATH, req.params.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('❌ File not found');
+  }
+  res.sendFile(filePath);
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
