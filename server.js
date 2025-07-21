@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -61,41 +61,43 @@ const fetchAndStorePDF = async (res, url, fileId) => {
   try {
     const response = await axios.get(url, { headers });
     const dataArray = response.data?.data;
-    const message = response.data?.message || 'Document not available';
 
-    if (!dataArray || dataArray.length === 0) {
-      return res.json({ fileUrl: message });
+    if (!Array.isArray(dataArray) || dataArray.length === 0) {
+      return res.json({ fileUrl: 'Payment Advice not available' });
     }
 
-    const paymentAdviceLink = dataArray[0]?.paymentAdviceLink;
-    if (!paymentAdviceLink || !paymentAdviceLink.includes('base64,')) {
-      return res.json({ fileUrl: message });
+    const entry = dataArray[0];
+    const paymentAdviceLink = entry?.paymentAdviceLink;
+
+    if (paymentAdviceLink && paymentAdviceLink.includes('base64,')) {
+      const base64PDF = paymentAdviceLink.split('base64,')[1];
+      const pdfBuffer = Buffer.from(base64PDF, 'base64');
+
+      const token = crypto.randomBytes(8).toString('hex');
+      const safeFileId = sanitizeFileName(fileId);
+
+      await pdfCollection.insertOne({
+        token,
+        name: `payment-${safeFileId}.pdf`,
+        buffer: pdfBuffer,
+        createdAt: new Date(),
+      });
+
+      const fileUrl = `${BASE_FILE_URL}/pdf/${token}`;
+      return res.json({ fileUrl });
     }
 
-    const base64PDF = paymentAdviceLink.split('base64,')[1];
-    const pdfBuffer = Buffer.from(base64PDF, 'base64');
-
-    const token = crypto.randomBytes(8).toString('hex');
-    const safeFileId = sanitizeFileName(fileId);
-
-    await pdfCollection.insertOne({
-      token,
-      name: `payment-${safeFileId}.pdf`,
-      buffer: pdfBuffer,
-      createdAt: new Date(),
-    });
-
-    const fileUrl = `${BASE_FILE_URL}/pdf/${token}`;
-    res.json({ fileUrl });
+    // Fallback if PDF is not found but message is present
+    const fallbackMessage = entry?.message || 'Payment Advice not available';
+    return res.json({ fileUrl: fallbackMessage });
   } catch (err) {
     console.error(err);
-    res.json({ fileUrl: 'Error while fetching document' });
+    return res.json({ fileUrl: 'Error while fetching document' });
   }
 };
 
-// ===== Endpoints =====
+// ===== Routes =====
 
-// 1. Task ID
 app.get('/download-pdf-task', async (req, res) => {
   const { taskId, emailId } = req.query;
   if (!taskId || !emailId) return res.json({ fileUrl: 'Entered Task ID is invalid' });
@@ -107,7 +109,6 @@ app.get('/download-pdf-task', async (req, res) => {
   await fetchAndStorePDF(res, url, `task-${taskId}`);
 });
 
-// 2. Invoice + PO
 app.get('/download-pdf-invoice', async (req, res) => {
   const { invoiceNumber, poNumber, emailId } = req.query;
   if (!invoiceNumber || !poNumber || !emailId) return res.json({ fileUrl: 'Entered Invoice/PO Number is invalid' });
@@ -118,7 +119,6 @@ app.get('/download-pdf-invoice', async (req, res) => {
   await fetchAndStorePDF(res, url, `invpo-${invoiceNumber}-${poNumber}`);
 });
 
-// 3. Invoice + Vendor
 app.get('/download-pdf-vendor', async (req, res) => {
   const { invoiceNumber, vendorCode, emailId } = req.query;
   if (!invoiceNumber || !vendorCode || !emailId) return res.json({ fileUrl: 'Entered Invoice/Vendor Code is invalid' });
@@ -129,7 +129,6 @@ app.get('/download-pdf-vendor', async (req, res) => {
   await fetchAndStorePDF(res, url, `invvendor-${invoiceNumber}-${vendorCode}`);
 });
 
-// 4. PO only
 app.get('/download-pdf-po', async (req, res) => {
   const { poNumber, emailId } = req.query;
   if (!poNumber || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -140,7 +139,6 @@ app.get('/download-pdf-po', async (req, res) => {
   await fetchAndStorePDF(res, url, `po-${poNumber}`);
 });
 
-// 5. GRN only
 app.get('/download-pdf-grn', async (req, res) => {
   const { grnNumber, emailId } = req.query;
   if (!grnNumber || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -151,7 +149,7 @@ app.get('/download-pdf-grn', async (req, res) => {
   await fetchAndStorePDF(res, url, `grn-${grnNumber}`);
 });
 
-// ===== Serve PDF from MongoDB =====
+// ===== Serve PDFs from Mongo =====
 app.get('/pdf/:token', async (req, res) => {
   const { token } = req.params;
   const doc = await pdfCollection.findOne({ token });
@@ -163,10 +161,10 @@ app.get('/pdf/:token', async (req, res) => {
   res.send(doc.buffer.buffer);
 });
 
-// ===== Maintenance Controls =====
+// ===== Maintenance Mode =====
 app.post('/enter-maintenance', (req, res) => {
   const { duration, key } = req.body;
-  if (!key || key !== MAINTENANCE_KEY) return res.status(403).json({});
+  if (key !== MAINTENANCE_KEY) return res.status(403).json({});
   if (!duration || typeof duration !== 'string') return res.status(400).json({});
 
   if (duration === 'indefinite') {
@@ -186,7 +184,7 @@ app.post('/enter-maintenance', (req, res) => {
 
 app.post('/exit-maintenance', (req, res) => {
   const { key } = req.body;
-  if (!key || key !== MAINTENANCE_KEY) return res.status(403).json({});
+  if (key !== MAINTENANCE_KEY) return res.status(403).json({});
   isPaused = false;
   pauseUntil = null;
   res.json({});
