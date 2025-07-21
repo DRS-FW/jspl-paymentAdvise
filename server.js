@@ -57,18 +57,18 @@ app.get('/', (req, res) => {
   res.send('✅ PDF MongoDB Storage Service is running.');
 });
 
-const fetchAndStorePDF = async (res, url, fileId) => {
+const fetchAndStorePDF = async (res, url, fileId, notFoundMessage) => {
   try {
     const response = await axios.get(url, { headers });
     const dataArray = response.data?.data;
 
     if (!dataArray || dataArray.length === 0) {
-      return res.json({ fileUrl: 'Payment Advice Document not available' });
+      return res.json({ fileUrl: notFoundMessage });
     }
 
     const paymentAdviceLink = dataArray[0]?.paymentAdviceLink;
     if (!paymentAdviceLink || !paymentAdviceLink.includes('base64,')) {
-      return res.json({ fileUrl: 'Payment Advice Document not available' });
+      return res.json({ fileUrl: notFoundMessage });
     }
 
     const base64PDF = paymentAdviceLink.split('base64,')[1];
@@ -77,7 +77,6 @@ const fetchAndStorePDF = async (res, url, fileId) => {
     const token = crypto.randomBytes(8).toString('hex');
     const safeFileId = sanitizeFileName(fileId);
 
-    // Store in MongoDB
     await pdfCollection.insertOne({
       token,
       name: `payment-${safeFileId}.pdf`,
@@ -89,45 +88,45 @@ const fetchAndStorePDF = async (res, url, fileId) => {
     res.json({ fileUrl });
   } catch (err) {
     console.error(err);
-    res.json({ fileUrl: 'Payment Advice Document not available' });
+    res.json({ fileUrl: notFoundMessage });
   }
 };
 
-// Task-based
+// Task ID based download
 app.get('/download-pdf-task', async (req, res) => {
   const { taskId, emailId } = req.query;
-  if (!taskId || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
+  if (!taskId || !emailId) return res.json({ fileUrl: 'Entered Task ID is invalid' });
 
   const encodedTaskId = encodeURIComponent(`$eq:${taskId}`);
   const encodedEmail = encodeURIComponent(emailId);
   const url = `${API_BASE_URL}?sortBy=timeStamp%3AASC&filter.validateKey=Vendor&filter.requiredType=PaymentAdvice&filter.nimbleS2PTaskId=${encodedTaskId}&filter.emailId=${encodedEmail}`;
 
-  await fetchAndStorePDF(res, url, `task-${taskId}`);
+  await fetchAndStorePDF(res, url, `task-${taskId}`, 'Entered Task ID is invalid');
 });
 
 // Invoice + PO
 app.get('/download-pdf-invoice', async (req, res) => {
   const { invoiceNumber, poNumber, emailId } = req.query;
-  if (!invoiceNumber || !poNumber || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
+  if (!invoiceNumber || !poNumber || !emailId) return res.json({ fileUrl: 'Entered Invoice/PO Number is invalid' });
 
   const encodedEmail = encodeURIComponent(emailId);
   const url = `${API_BASE_URL}?filter.validateKey=Vendor&filter.requiredType=PaymentAdvice&filter.invoiceNumber=%24eq%3A${invoiceNumber}&filter.poNumber=%24eq%3A${poNumber}&filter.emailId=${encodedEmail}`;
 
-  await fetchAndStorePDF(res, url, `invpo-${invoiceNumber}-${poNumber}`);
+  await fetchAndStorePDF(res, url, `invpo-${invoiceNumber}-${poNumber}`, 'Entered Invoice/PO Number is invalid');
 });
 
 // Invoice + Vendor
 app.get('/download-pdf-vendor', async (req, res) => {
   const { invoiceNumber, vendorCode, emailId } = req.query;
-  if (!invoiceNumber || !vendorCode || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
+  if (!invoiceNumber || !vendorCode || !emailId) return res.json({ fileUrl: 'Entered Invoice/Vendor Code is invalid' });
 
   const encodedEmail = encodeURIComponent(emailId);
   const url = `${API_BASE_URL}?filter.validateKey=Vendor&filter.requiredType=PaymentAdvice&filter.invoiceNumber=%24eq%3A${invoiceNumber}&filter.vendorCode=%24eq%3A${vendorCode}&filter.emailId=${encodedEmail}`;
 
-  await fetchAndStorePDF(res, url, `invvendor-${invoiceNumber}-${vendorCode}`);
+  await fetchAndStorePDF(res, url, `invvendor-${invoiceNumber}-${vendorCode}`, 'Entered Invoice/Vendor Code is invalid');
 });
 
-// Only PO
+// PO only
 app.get('/download-pdf-po', async (req, res) => {
   const { poNumber, emailId } = req.query;
   if (!poNumber || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -135,10 +134,10 @@ app.get('/download-pdf-po', async (req, res) => {
   const encodedEmail = encodeURIComponent(emailId);
   const url = `${API_BASE_URL}?filter.validateKey=Vendor&filter.requiredType=PaymentAdvice&filter.poNumber=%24eq%3A${poNumber}&filter.emailId=${encodedEmail}`;
 
-  await fetchAndStorePDF(res, url, `po-${poNumber}`);
+  await fetchAndStorePDF(res, url, `po-${poNumber}`, 'Payment Advice Document not available');
 });
 
-// Only GRN
+// GRN only
 app.get('/download-pdf-grn', async (req, res) => {
   const { grnNumber, emailId } = req.query;
   if (!grnNumber || !emailId) return res.json({ fileUrl: 'Payment Advice Document not available' });
@@ -146,10 +145,10 @@ app.get('/download-pdf-grn', async (req, res) => {
   const encodedEmail = encodeURIComponent(emailId);
   const url = `${API_BASE_URL}?filter.validateKey=Vendor&filter.requiredType=PaymentAdvice&filter.grnNumber=%24eq%3A${grnNumber}&filter.emailId=${encodedEmail}`;
 
-  await fetchAndStorePDF(res, url, `grn-${grnNumber}`);
+  await fetchAndStorePDF(res, url, `grn-${grnNumber}`, 'Payment Advice Document not available');
 });
 
-// Serve stored PDF
+// Serve PDF from Mongo
 app.get('/pdf/:token', async (req, res) => {
   const { token } = req.params;
   const doc = await pdfCollection.findOne({ token });
@@ -158,7 +157,7 @@ app.get('/pdf/:token', async (req, res) => {
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${doc.name}"`);
-  res.send(doc.buffer.buffer); // BSON Binary
+  res.send(doc.buffer.buffer);
 });
 
 // Maintenance controls
@@ -194,4 +193,4 @@ app.get('/status', (req, res) => {
   res.json({ paused: isPaused, pauseUntil, currentTime: new Date() });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
